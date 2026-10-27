@@ -1,5 +1,16 @@
 namespace Domain.Common;
 
+public enum ErrorType
+{
+    None = 0,
+    Validation,
+    NotFound,
+    Conflict,
+    Unauthorized,
+    Forbidden,
+    Failure
+}
+
 public class Result<T>
 {
     public bool IsSuccess { get; }
@@ -20,10 +31,15 @@ public class Result<T>
 
     public static Result<T> Success(T value) => new(value);
     public static Result<T> Failure(Error error) => new(error);
+    public TOut Match<TOut>(Func<T, TOut> onSuccess, Func<Error, TOut> onFailure)
+        => IsSuccess ? onSuccess(Value!) : onFailure(Error!);
+
 }
 
 public class Result
 {
+    public TOut Match<TOut>(Func<TOut> onSuccess, Func<Error, TOut> onFailure)
+        => IsSuccess ? onSuccess() : onFailure(Error!);
     public bool IsSuccess { get; }
     public Error? Error { get; }
 
@@ -37,8 +53,19 @@ public class Result
     public static Result Failure(Error error) => new(false, error);
 }
 
-public record Error(string Code, string Message)
+public record Error(string Code, string Message, ErrorType Type)
 {
-    public static Error NotFound(string code, string message) => new(code, message);
-    public static Error Validation(string code, string message) => new(code, message);
+    public static readonly Error None = new(string.Empty, string.Empty, ErrorType.None);
+    public static Error NotFound(string code, string message)
+    => new(code, message, ErrorType.NotFound);
+    public static Error Validation(string code, string message)
+    => new(code, message, ErrorType.Validation);
+    public static Error Conflict(string code, string message)
+    => new(code, message, ErrorType.Conflict);
+    public static Error Unauthorized(string code, string message)
+    => new(code, message, ErrorType.Unauthorized);
+    public static Error Forbidden(string code, string message)
+    => new(code, message, ErrorType.Forbidden);
+    public static Error Failure(string code, string message)
+    => new(code, message, ErrorType.Failure);
 }
