@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Routing;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Api.Common.Authorization;
 
 namespace Api.Features.Admissions;
 
@@ -23,7 +24,8 @@ public static class AdmissionEndpoints
 
         group.MapPost("/", Create)
             .WithName("CreateAdmission")
-            .WithSummary("Create a new admission with courses");
+            .WithSummary("Create a new admission with courses")
+            .RequireAuthorization(Policies.CanManageAdmissions);
 
         group.MapGet("/{id:guid}", GetById)
             .WithName("GetAdmissionById")
@@ -31,7 +33,8 @@ public static class AdmissionEndpoints
 
         group.MapGet("/", GetAll)
             .WithName("GetAllAdmissions")
-            .WithSummary("Get all admissions");
+            .WithSummary("Get all admissions")
+            .RequireAuthorization(Policies.CanManageAdmissions);
     }
 
     private static async Task<IResult> Create(

@@ -1,35 +1,36 @@
-using Api.Features.Students;
-using Api.Features.Courses;
+using Api.Common.Authorization;
 using Api.Features.Admissions;
+using Api.Features.Auth;
+using Api.Features.Courses;
+using Api.Features.Students;
+using Application.Abstractions;
 using Application.Abstractions.Data;
 using Application.Abstractions.Messaging;
-using Application.Features.Students.CreateStudent;
-using Application.Features.Students.GetAllStudents;
-using Application.Features.Students.GetStudentById;
-using Application.Features.Courses.CreateCourse;
-using Application.Features.Courses.GetAllCourses;
-using Application.Features.Courses.GetCourseById;
-using Application.Features.Courses.UpdateCourse;
-using Application.Features.Courses.DeleteCourse;
 using Application.Features.Admissions.CreateAdmission;
 using Application.Features.Admissions.GetAdmissionById;
 using Application.Features.Admissions.GetAllAdmissions;
+using Application.Features.Auth.Login;
+using Application.Features.Auth.Register;
+using Application.Features.Courses.CreateCourse;
+using Application.Features.Courses.DeleteCourse;
+using Application.Features.Courses.GetAllCourses;
+using Application.Features.Courses.GetCourseById;
+using Application.Features.Courses.UpdateCourse;
+using Application.Features.Students.CreateStudent;
+using Application.Features.Students.GetAllStudents;
+using Application.Features.Students.GetStudentById;
 using Domain.Common;
 using FluentValidation;
-using Infrastructure.Persistence;
-using Microsoft.EntityFrameworkCore;
-using Scalar.AspNetCore;
-using Application.Abstractions;
 using Infrastructure.Authentication;
-using Api.Features.Auth;
-using Application.Features.Auth.Register;
-using Application.Features.Auth.Login;
+using Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
 using Microsoft.OpenApi;
+using Scalar.AspNetCore;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -83,7 +84,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAppAuthorization();
 
 builder.Services.AddScoped<
     ICommandHandler<LoginCommand, Result<LoginResponse>>,
@@ -224,6 +225,32 @@ app.MapStudentEndpoints();
 app.MapCourseEndpoints();
 app.MapAdmissionEndpoints();
 app.MapAuthEndpoints();
+
+app.UseStatusCodePages(async (Microsoft.AspNetCore.Diagnostics.StatusCodeContext context) =>
+{
+    var response = context.HttpContext.Response;
+
+    if (response.StatusCode is StatusCodes.Status401Unauthorized
+                            or StatusCodes.Status403Forbidden)
+    {
+        var unauthorized = response.StatusCode == StatusCodes.Status401Unauthorized;
+
+        await response.WriteAsJsonAsync(
+            new Microsoft.AspNetCore.Mvc.ProblemDetails
+            {
+                Status = response.StatusCode,
+                Title = unauthorized ? "Unauthorized" : "Forbidden",
+                Detail = unauthorized
+                    ? "Authentication is required to access this resource."
+                    : "You do not have permission to perform this action."
+            },
+            options: null,
+            contentType: "application/problem+json");
+    }
+});
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.UseAuthentication();
 app.UseAuthorization();
