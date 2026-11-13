@@ -20,8 +20,90 @@ using Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using Application.Abstractions;
+using Infrastructure.Authentication;
+using Api.Features.Auth;
+using Application.Features.Auth.Register;
+using Application.Features.Auth.Login;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using Microsoft.OpenApi;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
+
+
+var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtSection["Issuer"],
+            ValidAudience = jwtSection["Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(jwtSection["SigningKey"]!)),
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var dbContext = context.HttpContext.RequestServices
+                    .GetRequiredService<IAppDbContext>();
+
+                var jti = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Jti);
+                var sub = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                    ?? context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+                var iatRaw = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Iat);
+
+                if (jti is not null && await dbContext.RevokedTokens.AnyAsync(r => r.Jti == jti))
+                {
+                    context.Fail("Token has been revoked.");
+                    return;
+                }
+
+                if (Guid.TryParse(sub, out var userId) && long.TryParse(iatRaw, out var iatUnix))
+                {
+                    var issuedAtUtc = DateTimeOffset.FromUnixTimeSeconds(iatUnix).UtcDateTime;
+                    var user = await dbContext.Users.FindAsync([userId]);
+
+                    if (user?.TokensValidFromUtc is { } validFrom && issuedAtUtc < validFrom)
+                    {
+                        context.Fail("Token was issued before the user's last sign-out-everywhere.");
+                    }
+                }
+            }
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+builder.Services.AddScoped<
+    ICommandHandler<LoginCommand, Result<LoginResponse>>,
+    LoginCommandHandler>();
+
+builder.Services.AddScoped<
+    ICommandHandler<RegisterCommand, Result<RegisterResponse>>,
+    RegisterCommandHandler>();
+
+builder.Services.AddOptions<JwtOptions>()
+    .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
+    .Validate(o => !string.IsNullOrWhiteSpace(o.SigningKey),
+        "Jwt:SigningKey is required. Set it using .NET User Secrets.")
+    .Validate(o => System.Text.Encoding.UTF8.GetByteCount(o.SigningKey ?? "") >= 32,
+        "Jwt:SigningKey must be at least 32 bytes.")
+    .ValidateOnStart();
+
+builder.Services.AddScoped<ITokenService, JwtTokenService>();
+
+builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 
 // Database
 builder.Services.AddDbContext<IAppDbContext, AppDbContext>(options =>
@@ -93,6 +175,35 @@ builder.Services.AddOpenApi(options =>
     });
 });
 
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??=
+            new Dictionary<string, IOpenApiSecurityScheme>();
+
+        document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT",
+            Description = "Paste the access token from /api/auth/login"
+        };
+
+        document.Security ??= [];
+        document.Security.Add(new OpenApiSecurityRequirement
+        {
+            [new OpenApiSecuritySchemeReference("Bearer", document)] = []
+        });
+
+        return Task.CompletedTask;
+    });
+});
+
+builder.Services.AddHostedService<
+    Infrastructure.BackgroundJobs.RevokedTokenCleanupService>();
+
 var app = builder.Build();
 
 await app.Services.MigrateAndSeedAsync();
@@ -112,5 +223,9 @@ app.MapGet("/", () =>
 app.MapStudentEndpoints();
 app.MapCourseEndpoints();
 app.MapAdmissionEndpoints();
+app.MapAuthEndpoints();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.Run();
